@@ -210,7 +210,11 @@ class UniVLAInference:
             if task_description != self.task_description:
                 self.reset(task_description)
 
+        print(image.shape)
+        
         image = (image.squeeze().permute(1, 2, 0) * 255).cpu().numpy().astype(np.uint8)
+
+        print(image.shape)
 
         image: Image.Image = Image.fromarray(image)
 
@@ -229,7 +233,7 @@ class UniVLAInference:
         for latent_action_ids in generated_ids[0]:
             hist_action += latent_action_detokenize[latent_action_ids.item() - 32001]
         self.prev_hist_action.append(hist_action)
-        action = self.action_decoder(latent_action, visual_embed, proprio)
+        action = self.action_decoder(latent_action, visual_embed, proprio.to("cuda:0"))
 
         return action
 

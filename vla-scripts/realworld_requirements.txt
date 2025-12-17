@@ -1,0 +1,6 @@
+wandb
+braceexpand
+webdataset
+torch==2.3
+torchvision==0.18
+flash-attn=2.5.8

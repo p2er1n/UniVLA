@@ -18,6 +18,9 @@ from einops import rearrange, repeat
 from transformers import CLIPTextModel, CLIPTokenizer
 import torchvision
 import random
+from dataclasses import dataclass
+from collections.abc import Sequence
+from typing import *
 
 
 logger = logging.getLogger(__name__)
@@ -36,7 +39,7 @@ class HDF5Dataset(torch.utils.data.Dataset):
                 min_window_size = 16,
                 max_window_size = 16,
                 image_transform = None,
-                other_config=()) -> None:,
+                other_config=()) -> None:
         
         super(HDF5Dataset).__init__()
         self.episode_ids = episode_ids
@@ -119,7 +122,7 @@ class HDF5Dataset(torch.utils.data.Dataset):
         qpos_chunking = self.qpos[clip_index][image_index]
 
         # cam_name = "0"
-        cam_name = "camera_high"
+        cam_name = "cam_high"
         image_chunking = self.image_dict[cam_name][clip_index][image_index:image_index + window_size]
         image_vla = Image.fromarray(np.transpose(image_chunking[extra_frame_num].cpu().numpy().astype(np.uint8), (1, 2, 0)))
         image_vla = self.color_aug(image_vla)

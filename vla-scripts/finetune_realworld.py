@@ -99,7 +99,7 @@ class Wrapped_Model(torch.nn.Module):
             latent_action_tokens.append(per_sample_latent_action_tokens)
         latent_action_tokens = torch.stack(latent_action_tokens).to(torch.float)
 
-        pred_action = self.action_decoder(latent_action_tokens, visual_embed).reshape(-1, self.window_size, 7)
+        pred_action = self.action_decoder(latent_action_tokens, visual_embed, batch["proprio"].to(torch.bfloat16)).reshape(-1, self.window_size, 7)
         loss = torch.nn.functional.l1_loss(pred_action, batch['actions'], reduction='none')
         loss_one_step = loss[:,0].mean()
         loss = loss.mean()
@@ -151,7 +151,7 @@ class FinetuneConfig:
                                                                     #   => CAUTION: Reduces memory but hurts performance
 
     # hdf5 data config                                                             
-    camera_names: str = "camera_high"
+    camera_names: str = "cam_high"
 
     # Tracking Parameters
     wandb_project: str = "fientune-real-world"                          # Name of W&B project to log to (use default!)
@@ -427,6 +427,11 @@ def finetune(cfg: FinetuneConfig) -> None:
                 # Get `attention_mask` by checking for `pad_token_id`
                 attention_mask = input_ids.ne(processor.tokenizer.pad_token_id)
 
+                # 移动到 GPU（保证所有传入模型的张量都在同一 device）
+                input_ids = input_ids.to(device_id)
+                labels = labels.to(device_id)
+                attention_mask = attention_mask.to(device_id)
+                
                 batch["input_ids"] = input_ids
                 batch["attention_mask"] = attention_mask
                 batch["labels"] = labels
