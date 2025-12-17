@@ -3,13 +3,11 @@ import sys
 import time
 import logging
 from threading import Thread, Event
+from pathlib import Path
 
-import torch
 import cv2
-import numpy as np
 import requests
 import base64
-import json
 
 from piper_sdk import C_PiperInterface_V2
 
@@ -19,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 class PiperClient:
-    def __init__(self, task_instruction, server_url, can_interface="can0", camera_port=0):
+    def __init__(self, task_instruction, server_url, can_interface="can0", camera_port=0, save_frames_dir=None):
         """
         Initialize Piper client for remote inference
         
@@ -28,9 +26,17 @@ class PiperClient:
             server_url (str): URL of inference server (e.g., http://localhost:8000)
             can_interface (str): CAN interface name (default: "can0")
             camera_port (int): Camera port/device (default: 0)
+            save_frames_dir (str): Directory to save frames (default: None for display mode)
         """
         self.task_instruction = task_instruction
         self.server_url = server_url.rstrip('/')  # Remove trailing slash
+        self.save_frames_dir = save_frames_dir
+        
+        # Create save directory if specified
+        if self.save_frames_dir:
+            save_path = Path(self.save_frames_dir)
+            save_path.mkdir(parents=True, exist_ok=True)
+            logger.info(f"Frame saving directory: {save_path.absolute()}")
         
         # Initialize Piper arm via CAN interface
         logger.info(f"Initializing Piper arm on CAN interface: {can_interface}")
@@ -120,14 +126,15 @@ class PiperClient:
         """
         try:
             joint_feedback = self.piper.GetArmJointCtrl()
+            gripper_feedback = self.piper.GetArmGripperCtrl()
             joint_state = [
-                joint_feedback.arm_joint_ctrl.joint_1,
-                joint_feedback.arm_joint_ctrl.joint_2,
-                joint_feedback.arm_joint_ctrl.joint_3,
-                joint_feedback.arm_joint_ctrl.joint_4,
-                joint_feedback.arm_joint_ctrl.joint_5,
-                joint_feedback.arm_joint_ctrl.joint_6,
-                joint_feedback.arm_joint_ctrl.gripper_angle
+                joint_feedback.joint_ctrl.joint_1,
+                joint_feedback.joint_ctrl.joint_2,
+                joint_feedback.joint_ctrl.joint_3,
+                joint_feedback.joint_ctrl.joint_4,
+                joint_feedback.joint_ctrl.joint_5,
+                joint_feedback.joint_ctrl.joint_6,
+                gripper_feedback.gripper_ctrl.grippers_angle
             ]
             return joint_state
         except Exception as e:
@@ -229,7 +236,10 @@ class PiperClient:
         """Main inference loop"""
         logger.info(f"Starting client for task: {self.task_instruction}")
         logger.info(f"Server URL: {self.server_url}")
-        logger.info("Press 'q' to quit")
+        if self.save_frames_dir:
+            logger.info(f"Saving frames to: {self.save_frames_dir}")
+        else:
+            logger.info("Press 'q' to quit")
         
         frame_count = 0
         inference_count = 0
@@ -280,18 +290,38 @@ class PiperClient:
                     cv2.putText(frame, joint_info, (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
                     cv2.putText(frame, gripper_info, (10, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
                 
-                cv2.imshow("Piper Client", frame)
-                
-                # Check for quit signal
-                key = cv2.waitKey(1) & 0xFF
-                if key == ord('q'):
-                    logger.info("Quit signal received")
-                    self.running.clear()
+                # Save or display frame
+                if self.save_frames_dir:
+                    self._save_frame(frame, frame_count)
+                else:
+                    cv2.imshow("Piper Client", frame)
+                    # Check for quit signal
+                    key = cv2.waitKey(1) & 0xFF
+                    if key == ord('q'):
+                        logger.info("Quit signal received")
+                        self.running.clear()
                 
         except KeyboardInterrupt:
             logger.info("Interrupted by user")
         finally:
             self.cleanup()
+    
+    def _save_frame(self, frame, frame_count):
+        """
+        Save frame to specified directory
+        
+        Args:
+            frame (numpy.ndarray): Frame to save
+            frame_count (int): Frame count for filename
+        """
+        try:
+            filename = f"frame_{frame_count:06d}.jpg"
+            filepath = Path(self.save_frames_dir) / filename
+            cv2.imwrite(str(filepath), frame)
+            if frame_count % 100 == 0:  # Log every 100 frames
+                logger.info(f"Saved frames up to {frame_count}")
+        except Exception as e:
+            logger.error(f"Failed to save frame {frame_count}: {e}")
     
     def cleanup(self):
         """Clean up resources"""
@@ -347,6 +377,13 @@ def main():
         help="Camera port/device index (default: 0 for /dev/video0)"
     )
     
+    parser.add_argument(
+        "--save-frames-dir",
+        type=str,
+        default=None,
+        help="Directory to save frames instead of displaying them (default: None for display mode)"
+    )
+    
     args = parser.parse_args()
     
     # Validate inputs
@@ -359,7 +396,8 @@ def main():
             task_instruction=args.task_instruction,
             server_url=args.server_url,
             can_interface=args.can_interface,
-            camera_port=args.camera_port
+            camera_port=args.camera_port,
+            save_frames_dir=args.save_frames_dir
         )
         
         client.run()
