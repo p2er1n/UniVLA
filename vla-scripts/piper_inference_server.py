@@ -4,10 +4,14 @@ import logging
 import json
 import base64
 import io
+import os
+import time
+from datetime import datetime
 
 import torch
 import torchvision
 import numpy as np
+import cv2  # 确保导入cv2
 from flask import Flask, request, jsonify
 
 from real_world_deployment import UniVLAInference
@@ -19,14 +23,25 @@ logger = logging.getLogger(__name__)
 # Flask app
 app = Flask(__name__)
 
-# Global inference policy
+# Global variables
 policy = None
 factor = 57295.7795  # 1000*180/π
+SAVE_IMAGE_DIR = None  # [New] Global variable for saving images
 
 
-def initialize_policy(model_path, decoder_path):
-    """Initialize UniVLA policy"""
-    global policy
+def initialize_policy(model_path, decoder_path, save_image_dir=None):
+    """Initialize UniVLA policy and configuration"""
+    global policy, SAVE_IMAGE_DIR
+    
+    # [New] Setup image saving directory
+    if save_image_dir:
+        SAVE_IMAGE_DIR = save_image_dir
+        if not os.path.exists(SAVE_IMAGE_DIR):
+            os.makedirs(SAVE_IMAGE_DIR)
+            logger.info(f"Created image save directory: {SAVE_IMAGE_DIR}")
+        else:
+            logger.info(f"Using existing image save directory: {SAVE_IMAGE_DIR}")
+
     logger.info(f"Initializing UniVLA with model: {model_path}")
     policy = UniVLAInference(
         saved_model_path=model_path,
@@ -38,7 +53,7 @@ def initialize_policy(model_path, decoder_path):
 
 def image_to_tensor(image_data):
     """
-    Convert base64 encoded image to tensor
+    Convert base64 encoded image to tensor and optionally save it to disk
     
     Args:
         image_data (str): Base64 encoded image string
@@ -51,19 +66,36 @@ def image_to_tensor(image_data):
     
     # Convert bytes to numpy array
     nparr = np.frombuffer(image_bytes, np.uint8)
+
+    # print(f"original image shape: {nparr.shape}")
     
     # Decode image
-    import cv2
     image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     
+    if image is None:
+        raise ValueError("Failed to decode image from bytes")
+
+    # [New] Save image if directory is configured
+    if SAVE_IMAGE_DIR:
+        try:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            filename = f"infer_{timestamp}.jpg"
+            filepath = os.path.join(SAVE_IMAGE_DIR, filename)
+            cv2.imwrite(filepath, image)
+            logger.debug(f"Saved debug image to: {filepath}")
+        except Exception as e:
+            logger.error(f"Failed to save debug image: {e}")
+
     # Convert BGR to RGB
     image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
     
     # Convert to tensor
     image_tensor = torch.from_numpy(image_rgb).permute(2, 0, 1).float()
+
+    # print(f"image shape: {image_tensor.shape}")
     
     # Resize to 224x224
-    image_resized = torchvision.transforms.Resize((224, 224))(image_tensor)
+    image_resized = torchvision.transforms.Resize((224, 224))(torch.flip(image_tensor, (1,)))
     
     # Add batch dimension
     image_batch = image_resized.unsqueeze(0)
@@ -113,22 +145,6 @@ def health():
 def infer():
     """
     Inference endpoint
-    
-    Expected POST data:
-    {
-        "image": "<base64_encoded_image>",
-        "task_instruction": "<task_instruction>",
-        "proprioception": [j0, j1, j2, j3, j4, j5, gripper_distance]
-    }
-    
-    Returns:
-    {
-        "success": true/false,
-        "joint_angles": [j0, j1, j2, j3, j4, j5],
-        "gripper_distance": <int>,
-        "raw_action": <list>,
-        "error": "<error_message>"
-    }
     """
     try:
         # Check if policy is loaded
@@ -161,7 +177,7 @@ def infer():
         task_instruction = data["task_instruction"]
         proprioception = data["proprioception"]
         
-        # Convert image to tensor
+        # Convert image to tensor (and save if configured)
         try:
             image_tensor = image_to_tensor(image_data)
         except Exception as e:
@@ -172,6 +188,7 @@ def infer():
         
         # Convert proprioception to tensor
         try:
+            proprioception = [j / factor for j in proprioception]
             proprio = torch.tensor([proprioception], dtype=torch.float32)
         except Exception as e:
             return jsonify({
@@ -182,6 +199,8 @@ def infer():
         # Run inference
         try:
             logger.info(f"Inference request: task='{task_instruction}'")
+            # logger.info(f"image_data: {image_data[:10]}, proprioception: {proprioception}")
+            # logger.info(f"image_tensor: {image_tensor.size()}")
             all_actions = policy.step(image_tensor, task_instruction, proprio)
             
             # Parse actions
@@ -249,12 +268,20 @@ def main():
         action="store_true",
         help="Enable debug mode"
     )
+
+    # [New] Argument for saving debug images
+    parser.add_argument(
+        "--save-image-dir",
+        type=str,
+        default=None,
+        help="Directory to save received images for debugging (default: None, do not save)"
+    )
     
     args = parser.parse_args()
     
     try:
-        # Initialize policy
-        initialize_policy(args.model, args.decoder)
+        # Initialize policy with save directory
+        initialize_policy(args.model, args.decoder, args.save_image_dir)
         
         # Start Flask server
         logger.info(f"Starting server on {args.host}:{args.port}")
