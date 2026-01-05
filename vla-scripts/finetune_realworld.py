@@ -22,7 +22,9 @@ from transformers import AutoModelForVision2Seq, AutoProcessor, BitsAndBytesConf
 from transformers import AutoConfig, AutoImageProcessor
 from transformers.modeling_outputs import CausalLMOutputWithPast
 
-import wandb
+#import wandb
+from torch.utils.tensorboard import SummaryWriter
+
 from prismatic.models.backbones.llm.prompting import PurePromptBuilder, VicunaV15ChatPromptBuilder
 from prismatic.vla.action_tokenizer import ActionTokenizer
 from prismatic.vla.datasets.rlds.utils.data_utils import save_dataset_statistics
@@ -154,8 +156,9 @@ class FinetuneConfig:
     camera_names: str = "cam_high"
 
     # Tracking Parameters
-    wandb_project: str = "fientune-real-world"                          # Name of W&B project to log to (use default!)
-    wandb_entity: str = "opendrivelab"                              # Name of entity to log under
+    #wandb_project: str = "fientune-real-world"                          # Name of W&B project to log to (use default!)
+    #wandb_entity: str = "opendrivelab"                              # Name of entity to log under
+    tensorboard_log_dir = "tensorboard_logs"
     run_id_note: Optional[str] = None                               # Extra note for logging, Weights & Biases
 
 
@@ -302,7 +305,9 @@ def finetune(cfg: FinetuneConfig) -> None:
     # Initialize Logging =>> W&B
     if distributed_state.is_main_process:
     # if accelerator.is_main_process:
-        wandb.init(entity=cfg.wandb_entity, project=cfg.wandb_project, name=f"ft+{exp_id}")
+        #wandb.init(entity=cfg.wandb_entity, project=cfg.wandb_project, name=f"ft+{exp_id}")
+        pass
+    writer = SummaryWriter(cfg.tensorboard_log_dir)
 
     # Deque to store recent train metrics (used for computing smoothened metrics for gradient accumulation)
     recent_losses = deque(maxlen=cfg.grad_accumulation_steps)
@@ -318,6 +323,8 @@ def finetune(cfg: FinetuneConfig) -> None:
 
 
             for batch_idx, batch in enumerate(dataloader):
+
+                #print(f"------>> {batch_idx} <<------")
 
                 batch["initial_pixel_values"] = batch["initial_pixel_values"].to(device_id)
                 batch["target_pixel_values"] = batch["target_pixel_values"].to(device_id)
@@ -463,6 +470,7 @@ def finetune(cfg: FinetuneConfig) -> None:
 
                 # Compute gradient step index
                 gradient_step_idx = batch_idx // cfg.grad_accumulation_steps
+                # print(f"------>> {gradient_step_idx} = {batch_idx} // {cfg.grad_accumulation_steps} <<------")
 
                 # Compute smoothened train metrics
                 #   =>> Equal to current step metrics when not using gradient accumulation
@@ -474,27 +482,37 @@ def finetune(cfg: FinetuneConfig) -> None:
                 if distributed_state.is_main_process: #and gradient_step_idx % 2 == 0:
                 # if accelerator.is_main_process and gradient_step_idx % 5 == 0:
                     # print("Step{}: Logging to wandb...".format(gradient_step_idx + current_step))
-                    wandb.log(
-                        {
-                            "train_loss": smoothened_loss,
-                            "action_accuracy": smoothened_action_accuracy,
-                            "action_loss": act_loss.item(),
-                            "action_loss_1step": loss_one_step.item(),
-                            "lr": optimizer.state_dict()['param_groups'][0]['lr']
-                            # "latent_align_loss": latent_align_loss.item(),
-                        },
-                        step=gradient_step_idx + current_step,
-                    )
-                    
+                    #wandb.log(
+                    #    {
+                    #        "train_loss": smoothened_loss,
+                    #        "action_accuracy": smoothened_action_accuracy,
+                    #        "action_loss": act_loss.item(),
+                    #        "action_loss_1step": loss_one_step.item(),
+                    #        "lr": optimizer.state_dict()['param_groups'][0]['lr']
+                    #        # "latent_align_loss": latent_align_loss.item(),
+                    #    },
+                    #    step=gradient_step_idx + current_step,
+                    #)
+                    pass
+                writer.add_scalar("normalized_loss/train", normalized_loss, gradient_step_idx + current_step)
+                writer.add_scalar("smoothened_loss/train", smoothened_loss, gradient_step_idx + current_step)
+                writer.add_scalar("action_accuracy/train", action_accuracy, gradient_step_idx + current_step)
+                writer.add_scalar("smoothened_action_accuracy/train", smoothened_action_accuracy, gradient_step_idx + current_step)
+                writer.add_scalar("act_loss/train", act_loss.item(), gradient_step_idx + current_step)
+                writer.add_scalar("action_loss_1step/train", loss_one_step.item(), gradient_step_idx + current_step)
+                writer.add_scalar("lr/train", optimizer.state_dict()['param_groups'][0]['lr'], gradient_step_idx + current_step)
 
+                #print(f"------>> {batch['actions'].size()} {cfg.batch_size} {batch_idx} % {cfg.grad_accumulation_steps} <<------")
                 # Optimizer Step
                 if (batch_idx + 1) % cfg.grad_accumulation_steps == 0:
+                    #print("======> Optimizer Steps ! <======")
                     optimizer.step()
                     optimizer.zero_grad()
                     scheduler.step()
                     progress.update()
 
                 # Save Model Checkpoint =>> by default, only keeps the latest checkpoint, continually overwriting it!
+                # print(f"------>> {gradient_step_idx} + {current_step} % {cfg.save_steps} = {(gradient_step_idx + current_step) % cfg.save_steps} <<------")
                 if (gradient_step_idx + current_step) > 0 and (gradient_step_idx + current_step) % cfg.save_steps == 0:
                     print(f"This is a process (rank {distributed_state.process_index}).")
                     if distributed_state.is_main_process: 
@@ -550,12 +568,13 @@ def finetune(cfg: FinetuneConfig) -> None:
             description = f"Epoch {current_step + 1} | action_loss: {act_loss.item():.4f} | acc: {smoothened_action_accuracy:.4f}"
             progress.set_description(description)
 
-            current_step = gradient_step_idx + 1 + current_step
             # Stop training when max_steps is reached
             if current_step >= cfg.max_steps:
                 print(f"Max step {cfg.max_steps} reached! Stopping training...")
-                wandb.finish()
+                #wandb.finish()
+                writer.flush()
                 break
+            current_step = gradient_step_idx + 1 + current_step
 
 
 if __name__ == "__main__":
