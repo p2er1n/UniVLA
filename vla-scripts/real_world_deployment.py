@@ -210,11 +210,14 @@ class UniVLAInference:
             if task_description != self.task_description:
                 self.reset(task_description)
 
-        print(image.shape)
-        
-        image = (image.squeeze().permute(1, 2, 0) * 255).cpu().numpy().astype(np.uint8)
+        # print(image.shape)
+        # print(image[0, 1, 1, 1 ])
 
-        print(image.shape)
+        # modified 期望图片的范围已经为0-256
+        image = (image.squeeze().permute(1, 2, 0)).cpu().numpy().astype(np.uint8)
+
+        # print(image.shape)
+        # print(image[1, 1, 1])
 
         image: Image.Image = Image.fromarray(image)
 
@@ -226,6 +229,7 @@ class UniVLAInference:
 
         # predict action (7-dof; un-normalize for bridgev2)
         inputs = self.processor(prompt, image).to("cuda:0", dtype=torch.bfloat16)
+        # print(f"inputs: {inputs}")
         latent_action, visual_embed, generated_ids = self.vla.predict_latent_action(**inputs, unnorm_key=self.unnorm_key, do_sample=True, temperature=0.75, top_p = 0.9)
 
         latent_action_detokenize = [f'<ACT_{i}>' for i in range(32)]
