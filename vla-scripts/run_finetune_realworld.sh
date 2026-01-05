@@ -1,1 +1,1 @@
-torchrun finetune_realworld.py --data_root_dir ../datasets/ --vla_path qwbu/univla-7b --lam_path ../latent_action_model/lam-stage-2.ckpt 
+torchrun finetune_realworld.py --data_root_dir ../../UniVLA-datasets/ --vla_path qwbu/univla-7b --lam_path ../../UniVLA-models/lam/lam-stage-2.ckpt "$@"
