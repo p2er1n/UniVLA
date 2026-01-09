@@ -61,6 +61,9 @@ class PiperClient:
         save_frames_dir: Optional[str] = None,
         hdf5_path: Optional[Path] = None,
         use_hdf5_qpos: bool = False,
+        loop_sleep_s: float = 0.0,
+        warmup_seconds: float = 0.0,
+        use_last_control_qpos: bool = False,
     ):
         """
         Initialize Piper client for remote inference.
@@ -79,6 +82,10 @@ class PiperClient:
         self.save_frames_dir = save_frames_dir
         self.hdf5_path = Path(hdf5_path) if hdf5_path else None
         self.use_hdf5_qpos = use_hdf5_qpos
+        self.loop_sleep_s = loop_sleep_s
+        self.warmup_seconds = warmup_seconds
+        self.use_last_control_qpos = use_last_control_qpos
+        self.last_control_qpos: Optional[Sequence[float]] = None
 
         # HDF5 members
         self.h5_file: Optional[h5py.File] = None
@@ -123,9 +130,7 @@ class PiperClient:
         # Check server health
         self._check_server_health()
 
-        # Reset arm to initial qpos if requested
-        if self.hdf5_path and self.use_hdf5_qpos:
-            self._reset_arm_to_initial_qpos()
+        # Reset arm to initial qpos if requested (handled at run start)
 
     def _init_camera(self, camera_port: int) -> None:
         logger.info(f"Initializing camera on port: {camera_port}")
@@ -178,11 +183,18 @@ class PiperClient:
 
     def get_camera_frame(self):
         """Capture frame from camera."""
-        ret, frame = self.cap.read()
-        if not ret:
-            logger.error("Failed to read frame from camera")
-            return None
-        return frame
+        max_attempts = 20
+        for attempt in range(1, max_attempts + 1):
+            ret, frame = self.cap.read()
+            if not ret or frame is None:
+                logger.warning(f"Failed to read frame from camera (attempt {attempt}/{max_attempts})")
+                continue
+            if np.std(frame) < 1.0:
+                logger.warning(f"Uniform-color frame detected (attempt {attempt}/{max_attempts}), retrying")
+                continue
+            return frame
+        logger.error("Failed to read a valid frame from camera after retries")
+        return None
 
     def _get_hdf5_frame(self) -> Optional[np.ndarray]:
         if self.h5_index >= self.h5_length:
@@ -308,6 +320,7 @@ class PiperClient:
             logger.info(f"Controlling gripper: distance={gripper_distance}")
 
             self.piper.GripperCtrl(gripper_distance, 1000, 0x01, 0)
+            self.last_control_qpos = [j0, j1, j2, j3, j4, j5, gripper_distance]
 
             arm_status = self.piper.GetArmStatus()
             logger.debug(f"Arm status: {arm_status}")
@@ -337,14 +350,24 @@ class PiperClient:
             if frame is None:
                 return None, None
             self.last_hdf5_qpos = self.h5_qpos_ds[self.h5_index - 1].tolist()
-            proprioception = self.last_hdf5_qpos if self.use_hdf5_qpos else self.get_proprioception()
+            if self.use_hdf5_qpos:
+                proprioception = self.last_hdf5_qpos
+                factor = 57295.7795
+                proprioception = [j * factor for j in proprioception[:-1]] + [proprioception[-1] * 1000000]
+            elif self.use_last_control_qpos and self.last_control_qpos is not None:
+                proprioception = list(self.last_control_qpos)
+            else:
+                proprioception = self.get_proprioception()
             return frame, proprioception
 
         self.last_hdf5_qpos = None
         frame = self.get_camera_frame()
         if frame is None:
             return None, None
-        proprioception = self.get_proprioception()
+        if self.use_last_control_qpos and self.last_control_qpos is not None:
+            proprioception = list(self.last_control_qpos)
+        else:
+            proprioception = self.get_proprioception()
         return frame, proprioception
 
     def run(self):
@@ -358,12 +381,28 @@ class PiperClient:
         else:
             logger.info("Press 'q' to quit")
 
+        if self.hdf5_path and self.use_hdf5_qpos:
+            # Ensure the arm reaches the first qpos before sending the first inference.
+            self._reset_arm_to_initial_qpos()
+            time.sleep(3.0)
+
         frame_count = 0
         inference_count = 0
         failed_count = 0
+        warmup_end_time = time.time() + max(0.0, self.warmup_seconds)
 
         try:
             while self.running.is_set():
+                in_warmup = time.time() < warmup_end_time
+                if in_warmup and self.hdf5_path:
+                    remaining = max(0.0, warmup_end_time - time.time())
+                    logger.info(f"Warmup... {remaining:.1f}s remaining")
+                    if self.loop_sleep_s > 0:
+                        time.sleep(self.loop_sleep_s)
+                    else:
+                        time.sleep(0.01)
+                    continue
+
                 frame, proprioception = self._next_frame_and_proprio()
                 if frame is None:
                     if self.hdf5_path:
@@ -372,29 +411,36 @@ class PiperClient:
                         break
                     continue
 
-                response = self.request_inference(frame, proprioception)
-
-                # Control: if using HDF5 qpos, send converted qpos to arm; otherwise use server response.
-                if self.use_hdf5_qpos and self.last_hdf5_qpos is not None:
-                    cmd = parse_actions(self.last_hdf5_qpos)
-                    self.control_robot(cmd["joint_angles"], cmd["gripper_distance"])
-                elif response is not None:
-                    joint_angles = response["joint_angles"]
-                    gripper_distance = response["gripper_distance"]
-                    self.control_robot(joint_angles, gripper_distance)
-
-                if response is not None:
-                    inference_count += 1
+                if in_warmup:
+                    remaining = max(0.0, warmup_end_time - time.time())
+                    logger.info(f"Warmup... {remaining:.1f}s remaining")
+                    response = None
                 else:
-                    failed_count += 1
-                    logger.warning(f"Failed inference count: {failed_count}")
+                    logger.info(f"Inference count: {inference_count}")
+                    logger.info(f"Frame count: {frame_count}")
+
+                    response = self.request_inference(frame, proprioception)
+                    logger.info(f"Input proprio: {proprioception}")
+                    logger.info(f"Response: {response}")
+
+                    # Control uses server response; HDF5 qpos is only for inference input.
+                    if response is not None:
+                        joint_angles = response["joint_angles"]
+                        gripper_distance = response["gripper_distance"]
+                        self.control_robot(joint_angles, gripper_distance)
+
+                    if response is not None:
+                        inference_count += 1
+                    else:
+                        failed_count += 1
+                        logger.warning(f"Failed inference count: {failed_count}")
 
                 frame_count += 1
 
                 # Visualization
                 cv2.putText(
                     frame,
-                    f"Frame: {frame_count} | Inferences: {inference_count} | Task: {self.task_instruction}",
+                    f"Inferences: {inference_count} | Frame: {frame_count} | Task: {self.task_instruction}",
                     (10, 30),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.7,
@@ -403,10 +449,13 @@ class PiperClient:
                 )
 
                 if response is not None:
-                    joint_info = f"Joints: {response['joint_angles'][:3]}"
+                    joint_info = f"Joints: {response['joint_angles']}"
                     gripper_info = f"Gripper: {response['gripper_distance']}"
                     cv2.putText(frame, joint_info, (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
                     cv2.putText(frame, gripper_info, (10, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                elif in_warmup:
+                    warmup_text = f"Warmup... {max(0.0, warmup_end_time - time.time()):.1f}s"
+                    cv2.putText(frame, warmup_text, (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
 
                 # Save or display frame
                 if self.save_frames_dir:
@@ -417,6 +466,8 @@ class PiperClient:
                     if key == ord("q"):
                         logger.info("Quit signal received")
                         self.running.clear()
+                if self.loop_sleep_s > 0:
+                    time.sleep(self.loop_sleep_s)
 
         except KeyboardInterrupt:
             logger.info("Interrupted by user")
@@ -485,6 +536,23 @@ def main():
         action="store_true",
         help="Use qpos from the HDF5 file for inference input and reset arm to the initial qpos",
     )
+    parser.add_argument(
+        "--loop-sleep-s",
+        type=float,
+        default=0.0,
+        help="Sleep duration in seconds at the end of each loop iteration (default: 0)",
+    )
+    parser.add_argument(
+        "--warmup-seconds",
+        type=float,
+        default=0.0,
+        help="Warmup duration in seconds before running inference/control (default: 0)",
+    )
+    parser.add_argument(
+        "--use-last-control-qpos",
+        action="store_true",
+        help="When using live qpos, send the last control command qpos instead of realtime feedback",
+    )
 
     args = parser.parse_args()
 
@@ -503,6 +571,9 @@ def main():
             save_frames_dir=args.save_frames_dir,
             hdf5_path=args.hdf5_file,
             use_hdf5_qpos=args.use_hdf5_qpos,
+            loop_sleep_s=args.loop_sleep_s,
+            warmup_seconds=args.warmup_seconds,
+            use_last_control_qpos=args.use_last_control_qpos,
         )
 
         client.run()
