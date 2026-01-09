@@ -208,29 +208,6 @@ class PiperClient:
             logger.error(f"Failed to encode frame: {e}")
             return None
 
-    # def get_proprioception(self):
-    #     """
-    #     Get current joint state from robot.
-
-    #     Returns:
-    #         list: [j0, j1, j2, j3, j4, j5, gripper_distance] or zeros if failed
-    #     """
-    #     try:
-    #         joint_feedback = self.piper.GetArmJointCtrl()
-    #         gripper_feedback = self.piper.GetArmGripperCtrl()
-    #         joint_state = [
-    #             joint_feedback.joint_ctrl.joint_1,
-    #             joint_feedback.joint_ctrl.joint_2,
-    #             joint_feedback.joint_ctrl.joint_3,
-    #             joint_feedback.joint_ctrl.joint_4,
-    #             joint_feedback.joint_ctrl.joint_5,
-    #             joint_feedback.joint_ctrl.joint_6,
-    #             gripper_feedback.gripper_ctrl.grippers_angle,
-    #         ]
-    #         return joint_state
-    #     except Exception as e:
-    #         logger.warning(f"Failed to get joint feedback: {e}, using zero proprioception")
-    #         return [0, 0, 0, 0, 0, 0, 0]
     def get_proprioception(self):
         """
         Get current joint state from robot
