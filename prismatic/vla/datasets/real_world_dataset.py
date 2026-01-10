@@ -62,6 +62,29 @@ class HDF5Dataset(torch.utils.data.Dataset):
     def __len__(self):
         return len(self.action)
 
+    def _get_max_episode_len(self, dataset_paths):
+        max_len = 0
+        for dataset_path in dataset_paths:
+            with h5py.File(dataset_path, 'r') as root:
+                episode_len = root['/action'].shape[0]
+            if episode_len > max_len:
+                max_len = episode_len
+        return max_len
+
+    def _pad_episode_arrays(self, actions, qpos, images_by_cam, max_len):
+        episode_len = actions.shape[0]
+        if episode_len >= max_len:
+            return actions, qpos, images_by_cam
+
+        pad_len = max_len - episode_len
+        actions = np.concatenate([actions, np.repeat(actions[-1:], pad_len, axis=0)], axis=0)
+        qpos = np.concatenate([qpos, np.repeat(qpos[-1:], pad_len, axis=0)], axis=0)
+        for cam_name, frames in images_by_cam.items():
+            images_by_cam[cam_name] = np.concatenate(
+                [frames, np.repeat(frames[-1:], pad_len, axis=0)], axis=0
+            )
+        return actions, qpos, images_by_cam
+
     def load_all_episodes(self, dataset_paths):
         image_dict = dict()
         image_hdf5_dict = dict()
@@ -70,16 +93,15 @@ class HDF5Dataset(torch.utils.data.Dataset):
         qpos = []
         actions = []
         instructions = []
+        max_episode_len = self._get_max_episode_len(dataset_paths)
+        self.episode_len = max_episode_len
         for dataset_path in dataset_paths:
             print(f"processing {dataset_path}")
 
             with h5py.File(dataset_path, 'r') as root:
                 compressed = root.attrs.get('compress', False)
-                original_action_shape = root['/action'].shape
-                self.episode_len = original_action_shape[0]
-
-                qpos.append(np.array(root['/observations/qpos']))
-                actions.append(np.array(root['/action']))
+                qpos_np = np.array(root['/observations/qpos'])
+                actions_np = np.array(root['/action'])
                 
                 file_name = dataset_path.split('/')[-1]
 
@@ -88,7 +110,12 @@ class HDF5Dataset(torch.utils.data.Dataset):
                 instructions.append(task_instruction)
                 
                 for cam_name in self.camera_names:
-                    image_hdf5_dict[cam_name] = root[f'/observations/images/{cam_name}']
+                    image_hdf5_dict[cam_name] = np.array(root[f'/observations/images/{cam_name}'])
+                actions_np, qpos_np, image_hdf5_dict = self._pad_episode_arrays(
+                    actions_np, qpos_np, image_hdf5_dict, max_episode_len
+                )
+                qpos.append(qpos_np)
+                actions.append(actions_np)
                 for cam_name in image_dict.keys():
                     image_one_cam = []
                     for i_img in range(image_hdf5_dict[cam_name].shape[0]):
@@ -322,5 +349,4 @@ def get_init_states(path_first_episode):
             qpos = key_info['init_info']['init_joint']
             action = key_info['init_info']['init_action']
     return qpos, action
-
 
