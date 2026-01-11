@@ -161,6 +161,12 @@ class FinetuneConfig:
     tensorboard_log_dir = "tensorboard_logs"
     run_id_note: Optional[str] = None                               # Extra note for logging, Weights & Biases
 
+def squeeze_except0(x):
+    # 从后往前，避免维度变化影响后续索引
+    for d in reversed(range(1, x.dim())):
+        if x.size(d) == 1:
+            x = x.squeeze(d)
+    return x
 
 
 @draccus.wrap()
@@ -340,9 +346,9 @@ def finetune(cfg: FinetuneConfig) -> None:
 
                     with torch.no_grad():
                         video = torch.stack([batch["initial_pixel_values"], batch["target_pixel_values"]], dim=1)
-                        latent_action_idx_batch = latent_action_model.module.vq_encode(video)['indices'].squeeze()
+                        latent_action_idx_batch = squeeze_except0(latent_action_model.module.vq_encode(video)['indices'])
                         video = torch.stack([batch["initial_pixel_values_hist"], batch["target_pixel_values_hist"]], dim=1)
-                        latent_action_idx_history = latent_action_model.module.vq_encode(video)['indices'].squeeze()
+                        latent_action_idx_history = squeeze_except0(latent_action_model.module.vq_encode(video)['indices'])
 
                     input_ids_list = []
                     labels_list = []
@@ -392,7 +398,7 @@ def finetune(cfg: FinetuneConfig) -> None:
                 else:
                     with torch.no_grad():
                         video = torch.stack([batch["initial_pixel_values"], batch["target_pixel_values"]], dim=1)
-                        latent_action_idx_batch = latent_action_model.module.vq_encode(video)['indices'].squeeze()
+                        latent_action_idx_batch = squeeze_except0(latent_action_model.module.vq_encode(video)['indices'])
 
                     input_ids_list = []
                     labels_list = []
