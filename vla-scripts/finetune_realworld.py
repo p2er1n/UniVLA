@@ -144,7 +144,7 @@ class FinetuneConfig:
     window_size: int = 12
 
 
-    freeze_vla: bool = False
+    freeze_vla: bool = False                                        # 如果同时开启use_lora和freeze_vla，lora的低秩矩阵的参数会被冻结
     # LoRA Arguments
     use_lora: bool = True                                           # Whether to use LoRA fine-tuning
     lora_rank: int = 32                                             # Rank of LoRA weight matrix

@@ -320,6 +320,9 @@ def finetune(cfg: FinetuneConfig) -> None:
             batch['actions'] = batch['actions'].to(device_id)
             batch['latent_action_idx'] = batch['latent_action_idx'].to(device_id)
             
+            
+            
+            
             # Forward pass
             output, act_loss, loss_one_step, latent_action_proj = wrapped_model(batch)
             loss = act_loss if cfg.freeze_vla else act_loss + output.loss
