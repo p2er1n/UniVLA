@@ -16,11 +16,11 @@ from peft import LoraConfig, PeftModel, get_peft_model, prepare_model_for_kbit_t
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import AdamW
 from torch.utils.data import DataLoader
+from torch.utils.tensorboard import SummaryWriter
 from transformers import AutoModelForVision2Seq, AutoProcessor, BitsAndBytesConfig
 from transformers import AutoConfig, AutoImageProcessor
 from transformers.modeling_outputs import CausalLMOutputWithPast
 
-import wandb
 from prismatic.models.backbones.llm.prompting import PurePromptBuilder, VicunaV15ChatPromptBuilder
 from prismatic.util.data_utils import PaddedCollatorForActionPrediction_LIBERO
 from prismatic.vla.action_tokenizer import ActionTokenizer
@@ -142,8 +142,7 @@ class FinetuneConfig:
                                                                     #   => CAUTION: Reduces memory but hurts performance
 
     # Tracking Parameters
-    wandb_project: str = "fientune-LIBERO"                          # Name of W&B project to log to (use default!)
-    wandb_entity: str = "opendrivelab"                              # Name of entity to log under
+    tensorboard_log_dir: Path = Path("libero_tf_logs")              # Directory for TensorBoard logs
     run_id_note: Optional[str] = None                               # Extra note for logging, Weights & Biases
 
 
@@ -299,9 +298,12 @@ def finetune(cfg: FinetuneConfig) -> None:
         num_workers=0,  # Important =>> Set to 0 if using RLDS; TFDS rolls its own parallelism!
     )
 
-    # Initialize Logging =>> W&B
+    # Initialize Logging =>> TensorBoard
+    writer = None
     if distributed_state.is_main_process:
-        wandb.init(entity=cfg.wandb_entity, project=cfg.wandb_project, name=f"ft+{exp_id}")
+        tb_log_dir = cfg.tensorboard_log_dir / exp_id
+        os.makedirs(tb_log_dir, exist_ok=True)
+        writer = SummaryWriter(log_dir=str(tb_log_dir))
 
     # Deque to store recent train metrics (used for computing smoothened metrics for gradient accumulation)
     recent_losses = deque(maxlen=cfg.grad_accumulation_steps)
@@ -319,9 +321,6 @@ def finetune(cfg: FinetuneConfig) -> None:
             batch["pixel_values"] = batch["pixel_values"].to(torch.bfloat16).to(device_id)
             batch['actions'] = batch['actions'].to(device_id)
             batch['latent_action_idx'] = batch['latent_action_idx'].to(device_id)
-            
-            
-            
             
             # Forward pass
             output, act_loss, loss_one_step, latent_action_proj = wrapped_model(batch)
@@ -360,17 +359,11 @@ def finetune(cfg: FinetuneConfig) -> None:
 
             # Push Metrics to W&B (every 5 gradient steps)
             if distributed_state.is_main_process and gradient_step_idx % 5 == 0:
-                
-                wandb.log(
-                    {
-                        "train_loss": smoothened_loss,
-                        "latent_action_accuracy": smoothened_action_accuracy,
-                        "action_loss": act_loss.item(),
-                        "action_loss_1step": loss_one_step.item(),
-                        "lr": optimizer.state_dict()['param_groups'][0]['lr'],
-                    },
-                    step=gradient_step_idx,
-                )
+                writer.add_scalar("train_loss", smoothened_loss, gradient_step_idx)
+                writer.add_scalar("latent_action_accuracy", smoothened_action_accuracy, gradient_step_idx)
+                writer.add_scalar("action_loss", act_loss.item(), gradient_step_idx)
+                writer.add_scalar("action_loss_1step", loss_one_step.item(), gradient_step_idx)
+                writer.add_scalar("lr", optimizer.state_dict()["param_groups"][0]["lr"], gradient_step_idx)
 
             # Optimizer Step
             if (batch_idx + 1) % cfg.grad_accumulation_steps == 0:
@@ -433,6 +426,8 @@ def finetune(cfg: FinetuneConfig) -> None:
             if gradient_step_idx == cfg.max_steps:
                 print(f"Max step {cfg.max_steps} reached! Stopping training...")
                 break
+    if writer is not None:
+        writer.close()
 
 
 if __name__ == "__main__":
