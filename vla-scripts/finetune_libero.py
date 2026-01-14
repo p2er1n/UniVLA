@@ -173,7 +173,7 @@ def finetune(cfg: FinetuneConfig) -> None:
         exp_id += "--image_aug"
 
     exp_id += f'=w-LowLevelDecoder-ws-{cfg.window_size}'
-   
+
     # Start =>> Build Directories
     run_dir, adapter_dir = cfg.run_root_dir / exp_id, cfg.adapter_tmp_dir / exp_id
     os.makedirs(run_dir, exist_ok=True)
@@ -270,7 +270,6 @@ def finetune(cfg: FinetuneConfig) -> None:
         window_size=cfg.window_size
     )
     
-
     vla_dataset = RLDSDataset(
         cfg.data_root_dir,
         cfg.dataset_name,

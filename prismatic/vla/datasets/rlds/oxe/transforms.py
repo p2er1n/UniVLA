@@ -957,6 +957,7 @@ OXE_STANDARDIZATION_TRANSFORMS = {
     "libero_object_no_noops": libero_dataset_transform,
     "libero_goal_no_noops": libero_dataset_transform,
     "libero_10_no_noops": libero_dataset_transform,
+    "realworld_piper": libero_dataset_transform,
     "libero_10_no_noops_mini": libero_dataset_transform,
     "libero_goal_no_noops_mini": libero_dataset_transform,
     "libero_goal_no_noops_half": libero_dataset_transform,
