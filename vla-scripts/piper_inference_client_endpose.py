@@ -92,9 +92,9 @@ def _action_to_end_pose_units(
         current_pose["x"] + float(action[0]),
         current_pose["y"] + float(action[1]),
         current_pose["z"] + float(action[2]),
-        float(action[3]),
-        float(action[4]),
-        float(action[5]),
+        current_pose["rx"] + float(action[3]),
+        current_pose["ry"] + float(action[4]),
+        current_pose["rz"] + float(action[5]),
     ]
     x = int(round(target[0] * POS_TO_PIPER))
     y = int(round(target[1] * POS_TO_PIPER))
@@ -102,7 +102,15 @@ def _action_to_end_pose_units(
     rx = int(round(target[3] * ANG_TO_PIPER))
     ry = int(round(target[4] * ANG_TO_PIPER))
     rz = int(round(target[5] * ANG_TO_PIPER))
-    gripper_distance = int(np.abs(action[6]) * 1000 * 1000)
+    
+    # gripper 返回的是-1和1，-1代表开，1代表合，先将-1和1进行映射
+    mapping = {
+        -1.0: 0.07,
+        1.0: 0
+    }
+    if action[6] not in mapping:
+        raise ValueError(f"Invalid gripper action value: {action[6]}")
+    gripper_distance = int(mapping[action[6]] * 1000 * 1000)
     return (x, y, z, rx, ry, rz), gripper_distance
 
 
