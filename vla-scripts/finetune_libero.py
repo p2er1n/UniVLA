@@ -21,6 +21,10 @@ from transformers import AutoModelForVision2Seq, AutoProcessor, BitsAndBytesConf
 from transformers import AutoConfig, AutoImageProcessor
 from transformers.modeling_outputs import CausalLMOutputWithPast
 
+import sys
+from pathlib import Path
+ROOT = Path(__file__).resolve().parents[1]   # project/
+sys.path.insert(0, str(ROOT))                # 放最前面，优先级最高
 from prismatic.models.backbones.llm.prompting import PurePromptBuilder, VicunaV15ChatPromptBuilder
 from prismatic.util.data_utils import PaddedCollatorForActionPrediction_LIBERO
 from prismatic.vla.action_tokenizer import ActionTokenizer
