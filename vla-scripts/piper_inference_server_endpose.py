@@ -19,6 +19,10 @@ from flask import Flask, request, jsonify
 
 # Append current directory so that interpreter can find experiments.robot
 sys.path.append("../..")
+import sys
+from pathlib import Path
+ROOT = Path(__file__).resolve().parents[1]   # project/
+sys.path.insert(0, str(ROOT))                # 放最前面，优先级最高
 from experiments.robot.libero.libero_utils import (
     get_libero_dummy_action,
     get_libero_env,
@@ -304,8 +308,11 @@ def infer_api():
 
         try:
             # image_rgb = _decode_image(data["image"])
-            # 转进来的就是ndarray
-            image_rgb = np.array(data["image"])
+            # 转进来是jpg压缩之后的b64码
+            # 先解码b64
+            image_bytes = base64.b64decode(data["image"])
+            image_bgr = cv2.imdecode(np.frombuffer(image_bytes, np.uint8), cv2.IMREAD_COLOR)
+            image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
         except Exception as exc:
             return jsonify({"success": False, "error": f"Failed to process image: {exc}"}), 400
 

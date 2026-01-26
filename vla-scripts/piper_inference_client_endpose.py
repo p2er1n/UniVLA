@@ -173,6 +173,13 @@ def main() -> None:
                 continue
             
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            # 将图片压缩成jpg
+            # img 是 cvtColor 返回的 BGR/RGB 矩阵
+            encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 90]  # 0-100
+            ok, buf = cv2.imencode(".jpg", frame, encode_param)
+            if ok:
+                jpg_bytes = buf.tobytes()
+            b64_str = base64.b64encode(jpg_bytes).decode("utf-8")    
             # print(frame)
             # print(type(frame))
             # print(frame.shape)
@@ -187,7 +194,7 @@ def main() -> None:
             current_pose = _convert_end_pose(end_pose)
 
             payload = {
-                "image": frame.tolist(),
+                "image": b64_str,
                 "task_instruction": args.task_instruction,
                 "infer_id": infer_id,
             }
