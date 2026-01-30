@@ -15,6 +15,7 @@ import requests
 import PIL.Image as Image
 
 from piper_sdk import C_PiperInterface_V2
+import wandb
 
 
 logging.basicConfig(level=logging.INFO)
@@ -131,7 +132,12 @@ def main() -> None:
     parser.add_argument("--camera-port", type=int, default=0, help="Camera port/device index")
     parser.add_argument("--loop-sleep-s", type=float, default=0.02, help="Sleep seconds between requests")
     parser.add_argument("--timeout-s", type=float, default=10.0, help="Inference request timeout")
+    parser.add_argument("--wandb-project", type=str, default="UniVLA-realworld-piper-client", help="Wandb project name")
+    
     args = parser.parse_args()
+    
+    wandb.login()
+    run = wandb.init(project=args.wandb_project,  config={"date": time.strftime("%Y-%m-%d"), "time": time.strftime("%H:%M:%S")})
 
     if not args.task_instruction.strip():
         parser.error("Task instruction cannot be empty")
@@ -214,6 +220,15 @@ def main() -> None:
             try:
                 pose_units, gripper_distance = _action_to_end_pose_units(action, current_pose)
                 # pose_units = tuple([pose_units[0], pose_units[1], pose_units[2], -178816, 64052, -72476])
+                run.log({
+                    "x": pose_units[0],
+                    "y": pose_units[1],
+                    "z": pose_units[2],
+                    "rx": pose_units[3],
+                    "ry": pose_units[4],
+                    "rz": pose_units[5],
+                    "gripper_distance": gripper_distance
+                })
                 _control_robot_end_pose(piper, pose_units, gripper_distance)
                 logger.info("Action: %s", pose_units)
             except Exception as exc:
@@ -225,6 +240,7 @@ def main() -> None:
         logger.info("Interrupted by user")
     finally:
         cap.release()
+        run.finish()
 
 
 if __name__ == "__main__":
