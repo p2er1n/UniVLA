@@ -133,11 +133,12 @@ def main() -> None:
     parser.add_argument("--loop-sleep-s", type=float, default=0.02, help="Sleep seconds between requests")
     parser.add_argument("--timeout-s", type=float, default=10.0, help="Inference request timeout")
     parser.add_argument("--wandb-project", type=str, default="UniVLA-realworld-piper-client", help="Wandb project name")
+    parser.add_argument("--wandb-task-name", type=str, default="default", help="Wandb task name, will be inserted into the config")
     
     args = parser.parse_args()
     
     wandb.login()
-    run = wandb.init(project=args.wandb_project,  config={"date": time.strftime("%Y-%m-%d"), "time": time.strftime("%H:%M:%S")})
+    run = wandb.init(project=args.wandb_project,  config={"date": time.strftime("%Y-%m-%d"), "time": time.strftime("%H:%M:%S"), "task": args.wandb_task_name})
 
     if not args.task_instruction.strip():
         parser.error("Task instruction cannot be empty")
