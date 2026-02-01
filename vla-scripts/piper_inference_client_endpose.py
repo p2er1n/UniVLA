@@ -115,10 +115,73 @@ def _action_to_end_pose_units(
     return (x, y, z, rx, ry, rz), gripper_distance
 
 
+osc_window = 5
+osc_delta_thresh = 200.0
+osc_sign_flip_ratio = 0.6
+pose_history: list[Tuple[float, float, float, float, float, float]] = []
+delta_history: list[Tuple[float, float, float, float, float, float]] = []
+
+
+def _update_osc_buffer(pose: Tuple[int, int, int, int, int, int]) -> None:
+    global pose_history, delta_history, osc_window
+    pose_f = tuple(float(v) for v in pose)
+    if pose_history:
+        prev = pose_history[-1]
+        delta = tuple(c - p for c, p in zip(pose_f, prev))
+        delta_history.append(delta)
+        if len(delta_history) > osc_window - 1:
+            delta_history.pop(0)
+    pose_history.append(pose_f)
+    if len(pose_history) > osc_window:
+        pose_history.pop(0)
+
+
+def _is_oscillating(
+    deltas: Sequence[Tuple[float, float, float, float, float, float]],
+    delta_thresh: float,
+    sign_flip_ratio: float,
+) -> bool:
+    if len(deltas) < 3:
+        return False
+    axes = list(zip(*deltas))
+    for axis_deltas in axes:
+        total_mag = 0.0
+        signs = []
+        for d in axis_deltas:
+            total_mag += abs(d)
+            if abs(d) < 1e-6:
+                continue
+            signs.append(1 if d > 0 else -1)
+        if total_mag / len(axis_deltas) < delta_thresh:
+            continue
+        if len(signs) < 3:
+            continue
+        flips = 0
+        for prev, cur in zip(signs, signs[1:]):
+            if prev != cur:
+                flips += 1
+        if flips / max(1, len(signs) - 1) >= sign_flip_ratio:
+            return True
+    return False
+
+
+def _maybe_average_pose(pose: Tuple[int, int, int, int, int, int]) -> Tuple[int, int, int, int, int, int]:
+    if osc_window <= 1:
+        return pose
+    _update_osc_buffer(pose)
+    if len(pose_history) < osc_window or len(delta_history) < osc_window - 1:
+        return pose
+    if _is_oscillating(delta_history, osc_delta_thresh, osc_sign_flip_ratio):
+        axes = list(zip(*pose_history))
+        avg = [sum(axis) / len(axis) for axis in axes]
+        return tuple(int(round(v)) for v in avg)
+    return pose
+
+
 def _control_robot_end_pose(
     piper: C_PiperInterface_V2, pose_units: Tuple[int, int, int, int, int, int], gripper_distance: int
 ) -> None:
-    x, y, z, rx, ry, rz = pose_units
+    x, y, z, rx, ry, rz = _maybe_average_pose(pose_units)
     piper.MotionCtrl_2(0x01, 0x00, 100, 0x00)
     piper.EndPoseCtrl(x, y, z, rx, ry, rz)
     piper.GripperCtrl(gripper_distance, 1000, 0x01, 0)
@@ -132,10 +195,33 @@ def main() -> None:
     parser.add_argument("--camera-port", type=int, default=0, help="Camera port/device index")
     parser.add_argument("--loop-sleep-s", type=float, default=0.02, help="Sleep seconds between requests")
     parser.add_argument("--timeout-s", type=float, default=10.0, help="Inference request timeout")
+    parser.add_argument(
+        "--osc-window",
+        type=int,
+        default=1,
+        help="Number of recent poses to detect oscillation (<=1 disables)",
+    )
+    parser.add_argument(
+        "--osc-delta-thresh",
+        type=float,
+        default=200.0,
+        help="Average delta threshold in Piper units to consider oscillation",
+    )
+    parser.add_argument(
+        "--osc-sign-flip-ratio",
+        type=float,
+        default=0.6,
+        help="Minimum sign-flip ratio in deltas to consider oscillation",
+    )
     parser.add_argument("--wandb-project", type=str, default="UniVLA-realworld-piper-client", help="Wandb project name")
     parser.add_argument("--wandb-task-name", type=str, default="default", help="Wandb task name, will be inserted into the config")
     
     args = parser.parse_args()
+
+    global osc_window, osc_delta_thresh, osc_sign_flip_ratio
+    osc_window = max(1, args.osc_window)
+    osc_delta_thresh = args.osc_delta_thresh
+    osc_sign_flip_ratio = args.osc_sign_flip_ratio
     
     wandb.login()
     run = wandb.init(project=args.wandb_project,  config={"date": time.strftime("%Y-%m-%d"), "time": time.strftime("%H:%M:%S"), "task": args.wandb_task_name})
