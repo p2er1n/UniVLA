@@ -193,7 +193,18 @@ def main() -> None:
     parser.add_argument("--server-url", type=str, default="http://localhost:6006", help="Inference server URL")
     parser.add_argument("--can-interface", type=str, default="can0", help="CAN interface name for Piper arm")
     parser.add_argument("--camera-port", type=int, default=0, help="Camera port/device index")
-    parser.add_argument("--loop-sleep-s", type=float, default=0.02, help="Sleep seconds between requests")
+    parser.add_argument(
+        "--loop-sleep-s",
+        type=float,
+        default=0.0,
+        help="Fixed sleep seconds between requests (ignored if --target-fps > 0)",
+    )
+    parser.add_argument(
+        "--target-fps",
+        type=float,
+        default=0.0,
+        help="Target control frequency (0 disables FPS control)",
+    )
     parser.add_argument("--timeout-s", type=float, default=10.0, help="Inference request timeout")
     parser.add_argument(
         "--osc-window",
@@ -257,12 +268,16 @@ def main() -> None:
     for i in range(50):
         ok, frame = cap.read()
     
+    target_period_s = 0.0 if args.target_fps <= 0 else 1.0 / args.target_fps
     try:
         while True:
+            loop_start_s = time.time()
             request_id += 1
             ok, frame = cap.read()
             if not ok or frame is None:
                 logger.warning("Failed to read frame from camera")
+                if args.loop_sleep_s > 0:
+                    time.sleep(args.loop_sleep_s)
                 continue
             
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -321,7 +336,12 @@ def main() -> None:
             except Exception as exc:
                 logger.error("Failed to process action: %s", exc)
 
-            if args.loop_sleep_s > 0:
+            if target_period_s > 0.0:
+                elapsed_s = time.time() - loop_start_s
+                sleep_s = target_period_s - elapsed_s
+                if sleep_s > 0:
+                    time.sleep(sleep_s)
+            elif args.loop_sleep_s > 0:
                 time.sleep(args.loop_sleep_s)
     except KeyboardInterrupt:
         logger.info("Interrupted by user")
