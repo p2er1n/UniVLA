@@ -2,6 +2,7 @@ import os
 import sys
 import base64
 import logging
+import argparse
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Union
@@ -336,7 +337,12 @@ def infer_api():
         return jsonify({"success": False, "error": f"Inference failed: {exc}"}), 500
 
 if __name__ == "__main__":
-    vla_path = '/autodl-fs/data/UniVLA/vla-scripts/libero-realworld-runs/univla-7b+realworld_piper+b16+lr-0.00035+lora-r32+dropout-0.0--image_aug=w-LowLevelDecoder-ws-12/'
-    decoder_path = '/autodl-fs/data/UniVLA/vla-scripts/libero-realworld-runs/univla-7b+realworld_piper+b16+lr-0.00035+lora-r32+dropout-0.0--image_aug=w-LowLevelDecoder-ws-12/action_decoder-30000.pt'
-    init(vla_path, decoder_path)
-    app.run(host='0.0.0.0', port=6006)
+    parser = argparse.ArgumentParser(description="UniVLA Piper inference server (endpose).")
+    parser.add_argument("--vla-path", required=True, help="Path to pretrained VLA checkpoint.")
+    parser.add_argument("--decoder-path", required=True, help="Path to action decoder checkpoint.")
+    parser.add_argument("--host", default="0.0.0.0", help="Flask host to bind.")
+    parser.add_argument("--port", type=int, default=6006, help="Flask port to bind.")
+    args = parser.parse_args()
+
+    init(args.vla_path, args.decoder_path)
+    app.run(host=args.host, port=args.port)
