@@ -62,11 +62,20 @@ class ActionDecoder(torch.nn.Module):
         return action
 
 class Wrapped_Model(torch.nn.Module):
-    def __init__(self, vla, freeze_vla = False, window_size = 12):
+    def __init__(self, cfg, vla, freeze_vla = False, window_size = 12):
         super().__init__()
         self.vla = vla
         self.window_size = window_size
         self.action_decoder = ActionDecoder(window_size=window_size)
+        
+        before = self.action_decoder.proj[0].weight.norm().item()
+        if cfg.resume_from_steps is not None:
+            assert cfg.action_decoder_path is not None, "Must provide action decoder path when resuming!"
+            state = torch.load(cfg.action_decoder_path, map_location=f"cuda:{torch.cuda.current_device()}")
+            self.action_decoder.load_state_dict(state, strict=True)
+        after = self.action_decoder.proj[0].weight.norm().item()
+        if cfg.resume_from_steps is not None:
+            assert before != after, "Action decoder weights not changed after loading!"
 
         if freeze_vla:
             self.vla.requires_grad_(False)
@@ -128,6 +137,10 @@ class FinetuneConfig:
     save_latest_checkpoint_only: bool = True                        # Whether to save only one checkpoint per run and
                                                                     #   continually。overwrite the latest checkpoint
                                                                     #   (If False, saves all checkpoints)
+    resume_from_steps: Optional[int] = None                         # Step number to resume from (if any)
+    action_decoder_path: Optional[str] = None                       # Path to pre-trained low-level action decoder (if any, used for resuming training)
+    resume_state_path: Optional[str] = None                         # Path to optimizer/scheduler state (if any, used for resuming training)
+    
     # LAM setting
     codebook_size: int = 16
     lam_model_dim: int = 768
@@ -229,7 +242,7 @@ def finetune(cfg: FinetuneConfig) -> None:
     # Create Action Tokenizer
     action_tokenizer = ActionTokenizer(processor.tokenizer)
 
-    wrapped_model = Wrapped_Model(vla = vla, freeze_vla = cfg.freeze_vla, window_size=cfg.window_size).to(device_id)
+    wrapped_model = Wrapped_Model(cfg, vla = vla, freeze_vla = cfg.freeze_vla, window_size=cfg.window_size).to(device_id)
 
     
     trainable_total_params = sum(p.numel() for p in wrapped_model.parameters() if p.requires_grad)
@@ -242,6 +255,16 @@ def finetune(cfg: FinetuneConfig) -> None:
     trainable_params = [param for param in wrapped_model.parameters() if param.requires_grad]
     optimizer = AdamW(trainable_params, lr=cfg.learning_rate, weight_decay=1e-3)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size = int(cfg.max_steps * 0.8), gamma=0.1)
+    resume_step_from_state = None
+    if cfg.resume_state_path is not None:
+        resume_state = torch.load(cfg.resume_state_path, map_location="cpu")
+        optimizer.load_state_dict(resume_state["optimizer"])
+        scheduler.load_state_dict(resume_state["scheduler"])
+        resume_step_from_state = resume_state.get("step", None)
+        if cfg.resume_from_steps is not None:
+            assert (
+                resume_step_from_state == cfg.resume_from_steps
+            ), "resume_from_steps does not match step in resume_state_path; please fix and retry."
 
         
     from latent_action_model.genie.modules.lam import ControllableDINOLatentActionModel
@@ -315,9 +338,13 @@ def finetune(cfg: FinetuneConfig) -> None:
     recent_l1_losses = deque(maxlen=cfg.grad_accumulation_steps)
 
     # Train!
-    with tqdm.tqdm(total=cfg.max_steps, leave=False) as progress:
+    with tqdm.tqdm(total=cfg.max_steps, leave=False, initial=cfg.resume_from_steps if cfg.resume_from_steps is not None else 0) as progress:
         wrapped_model.train()
         optimizer.zero_grad()
+        if resume_step_from_state is not None:
+            base_gradient_step_idx = resume_step_from_state
+        else:
+            base_gradient_step_idx = 0 if cfg.resume_from_steps is None else cfg.resume_from_steps
         for batch_idx, batch in enumerate(dataloader):
             batch["input_ids"] = batch["input_ids"].to(device_id)
             batch["attention_mask"] = batch["attention_mask"].to(device_id)
@@ -353,7 +380,7 @@ def finetune(cfg: FinetuneConfig) -> None:
             recent_action_accuracies.append(action_accuracy.item())
 
             # Compute gradient step index
-            gradient_step_idx = batch_idx // cfg.grad_accumulation_steps
+            gradient_step_idx = base_gradient_step_idx + batch_idx // cfg.grad_accumulation_steps
 
             # Compute smoothened train metrics
             #   =>> Equal to current step metrics when not using gradient accumulation
@@ -391,6 +418,14 @@ def finetune(cfg: FinetuneConfig) -> None:
 
                     # Save low-level policy
                     torch.save(wrapped_model.module.action_decoder.state_dict(), str(run_dir) + f'/action_decoder-{gradient_step_idx}.pt')
+                    torch.save(
+                        {
+                            "optimizer": optimizer.state_dict(),
+                            "scheduler": scheduler.state_dict(),
+                            "step": gradient_step_idx,
+                        },
+                        str(run_dir) + f"/optim_sched-{gradient_step_idx}.pt",
+                    )
 
                 # Wait for processor and adapter weights to be saved by main process
                 dist.barrier()
