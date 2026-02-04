@@ -22,10 +22,10 @@ torchrun --standalone --nnodes 1 --nproc-per-node 1 finetune_libero.py \
 
 torchrun --standalone --nnodes 1 --nproc-per-node 1 finetune_libero.py \
                                  --dataset_name "realworld_piper" \
-                                 --data_root_dir "/autodl-fs/data/UniVLA/UniVLA-datasets/realworld_piper-30fps-0.1" \
+                                 --data_root_dir "/autodl-fs/data/UniVLA/UniVLA-datasets/realworld_piper-10fps-0.1" \
                                  --vla_path "/autodl-fs/data/UniVLA/UniVLA/vla-scripts/runs/univla-7b+realworld_piper+10fps-0.1+b8x2+lr-0.00035+lora-r32+dropout-0.0--image_aug=w-LowLevelDecoder-ws-12--20000_chkpt" \
                                  --lam_path "/autodl-fs/data/UniVLA/UniVLA-models/lam/lam-stage-2.ckpt" \
-                                 --dataset_note "30fps-0.1" \
+                                 --dataset_note "10fps-0.1" \
                                  --save_latest_checkpoint_only False \
                                  --resume_from_steps 20000 \
                                  --resume_state_path "/autodl-fs/data/UniVLA/UniVLA/vla-scripts/runs/univla-7b+realworld_piper+10fps-0.1+b8x2+lr-0.00035+lora-r32+dropout-0.0--image_aug=w-LowLevelDecoder-ws-12/optim_sched-20000.pt" \
