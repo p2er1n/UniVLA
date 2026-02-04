@@ -177,8 +177,8 @@ def finetune(cfg: FinetuneConfig) -> None:
 
     # Configure Unique Experiment ID & Log Directory
     exp_id = (
-        f"{cfg.vla_path.split('/')[-1]}+{cfg.dataset_name}:{cfg.dataset_note}"
-        f"+b{cfg.batch_size}*{cfg.grad_accumulation_steps}"
+        f"{cfg.vla_path.split('/')[-1]}+{cfg.dataset_name}+{cfg.dataset_note}"
+        f"+b{cfg.batch_size}x{cfg.grad_accumulation_steps}"
         f"+lr-{cfg.learning_rate}"
     )
     if cfg.use_lora:
