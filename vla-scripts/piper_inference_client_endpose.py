@@ -179,10 +179,10 @@ def _maybe_average_pose(pose: Tuple[int, int, int, int, int, int]) -> Tuple[int,
 
 
 def _control_robot_end_pose(
-    piper: C_PiperInterface_V2, pose_units: Tuple[int, int, int, int, int, int], gripper_distance: int
+    piper: C_PiperInterface_V2, pose_units: Tuple[int, int, int, int, int, int], gripper_distance: int, speed: int = 3
 ) -> Tuple[int, int, int, int, int, int]:
     x, y, z, rx, ry, rz = _maybe_average_pose(pose_units)
-    piper.MotionCtrl_2(0x01, 0x00, 100, 0x00)
+    piper.MotionCtrl_2(0x01, 0x00, speed, 0x00)
     piper.EndPoseCtrl(x, y, z, rx, ry, rz)
     piper.GripperCtrl(gripper_distance, 1000, 0x01, 0)
     return x, y, z, rx, ry, rz
@@ -206,6 +206,7 @@ def main() -> None:
         default=0.0,
         help="Target control frequency (0 disables FPS control)",
     )
+    parser.add_argument("--speed", type=int, default=3, help="Motion speed for Piper arm")
     parser.add_argument("--timeout-s", type=float, default=10.0, help="Inference request timeout")
     parser.add_argument(
         "--osc-window",
@@ -323,7 +324,7 @@ def main() -> None:
             try:
                 pose_units, gripper_distance = _action_to_end_pose_units(action, current_pose)
                 # pose_units = tuple([pose_units[0], pose_units[1], pose_units[2], -178816, 64052, -72476])
-                final_pose_units = _control_robot_end_pose(piper, pose_units, gripper_distance)
+                final_pose_units = _control_robot_end_pose(piper, pose_units, gripper_distance, args.speed)
                 run.log({
                     "raw_x": float(action[0]),
                     "raw_y": float(action[1]),
