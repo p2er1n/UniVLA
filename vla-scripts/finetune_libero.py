@@ -176,8 +176,9 @@ def finetune(cfg: FinetuneConfig) -> None:
     torch.cuda.empty_cache()
 
     # Configure Unique Experiment ID & Log Directory
-    exp_id = (
-        f"{cfg.vla_path.split('/')[-1]}+{cfg.dataset_name}+{cfg.dataset_note}"
+    exp_id = "resume" if cfg.resume_from_steps is not None or cfg.resume_state_path is not None else f"{cfg.vla_path.split('/')[-1]}"
+    exp_id += (
+        f"+{cfg.dataset_name}+{cfg.dataset_note}"
         f"+b{cfg.batch_size}x{cfg.grad_accumulation_steps}"
         f"+lr-{cfg.learning_rate}"
     )
@@ -195,6 +196,12 @@ def finetune(cfg: FinetuneConfig) -> None:
     # Start =>> Build Directories
     run_dir, adapter_dir = cfg.run_root_dir / exp_id, cfg.adapter_tmp_dir / exp_id
     os.makedirs(run_dir, exist_ok=True)
+    
+    # 如果是resume，就把之前的参数保存到一个文本文件中，另存到run_dir
+    if cfg.resume_from_steps is not None or cfg.resume_state_path is not None:
+        with open(run_dir / "finetune_config.txt", "w") as f:
+            # 假设resume时使用的vla文件名就包含上次训练的参数
+            f.write(cfg.vla_path.split('/')[-1])
 
     # Quantization Config =>> only if LoRA fine-tuning
     quantization_config = None
@@ -335,14 +342,14 @@ def finetune(cfg: FinetuneConfig) -> None:
     recent_action_accuracies = deque(maxlen=cfg.grad_accumulation_steps)
     recent_l1_losses = deque(maxlen=cfg.grad_accumulation_steps)
 
+    if resume_step_from_state is not None:
+        base_gradient_step_idx = resume_step_from_state+1
+    else:
+        base_gradient_step_idx = 0 if cfg.resume_from_steps is None else cfg.resume_from_steps + 1
     # Train!
-    with tqdm.tqdm(total=cfg.max_steps, leave=False, initial=cfg.resume_from_steps if cfg.resume_from_steps is not None else 0) as progress:
+    with tqdm.tqdm(total=cfg.max_steps, leave=False, initial=base_gradient_step_idx if cfg.resume_from_steps is not None else 0) as progress:
         wrapped_model.train()
         optimizer.zero_grad()
-        if resume_step_from_state is not None:
-            base_gradient_step_idx = resume_step_from_state
-        else:
-            base_gradient_step_idx = 0 if cfg.resume_from_steps is None else cfg.resume_from_steps
         for batch_idx, batch in enumerate(dataloader):
             batch["input_ids"] = batch["input_ids"].to(device_id)
             batch["attention_mask"] = batch["attention_mask"].to(device_id)
